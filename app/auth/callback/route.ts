@@ -15,11 +15,18 @@ export async function GET(request: NextRequest) {
       await supabase.auth.exchangeCodeForSession(code);
 
     if (!error) {
-      // Only allow internal paths.
-      const safeNext =
-        next && next.startsWith("/") && !next.startsWith("//")
-          ? next
-          : null;
+      // Resolve and compare origins so backslash-based external URLs are rejected too.
+      let safeNext: string | null = null;
+      if (next && next.startsWith("/") && !next.startsWith("//")) {
+        try {
+          const candidate = new URL(next, origin);
+          if (candidate.origin === origin) {
+            safeNext = `${candidate.pathname}${candidate.search}${candidate.hash}`;
+          }
+        } catch {
+          safeNext = null;
+        }
+      }
 
       const destination =
         safeNext ?? await getUserDestination();

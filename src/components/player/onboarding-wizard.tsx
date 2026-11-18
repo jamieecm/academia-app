@@ -20,8 +20,15 @@ import { createClient } from "@/src/lib/supabase/client";
 import PlayerCard, {
   type PlayerPosition,
   type PlayerStats,
-  type CardRarity,
 } from "@/src/components/player/player-card";
+import {
+  calculatePlayerRating,
+  getPlayerPositionName,
+  isPlayerPosition,
+  type PlayerAttributes,
+  type PlayerRarity,
+} from "@/src/lib/player/rating";
+import { removeImageBackground } from "@/src/lib/player/remove-image-background";
 
 type OnboardingProps = {
   initialNickname: string;
@@ -29,11 +36,49 @@ type OnboardingProps = {
   initialAvatar: string;
 };
 
-const positions = [
+function getErrorMessage(error: unknown): string | null {
+  if (error instanceof Error) return error.message;
+
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message;
+  }
+
+  return null;
+}
+
+function isMissingColumnError(error: unknown, column: string): boolean {
+  if (typeof error !== "object" || error === null) return false;
+
+  const errorDetails = error as Record<string, unknown>;
+  const details = ["message", "details", "hint"]
+    .map((key) =>
+      typeof errorDetails[key] === "string" ? errorDetails[key] : ""
+    )
+    .join(" ")
+    .toLowerCase();
+  const code = typeof errorDetails.code === "string" ? errorDetails.code : "";
+
+  return (
+    details.includes(column.toLowerCase()) &&
+    (details.includes("column") || details.includes("schema cache") || code === "42703")
+  );
+}
+
+type PositionOption = {
+  code: PlayerPosition;
+  description: string;
+  emoji: string;
+};
+
+const positions: PositionOption[] = [
   // --- ARQUERO ---
   {
     code: "POR",
-    name: "Portero",
     description: "El último hombre y guardián del arco.",
     emoji: "🧤",
   },
@@ -41,19 +86,16 @@ const positions = [
   // --- DEFENSAS ---
   {
     code: "DFC",
-    name: "Defensa Central",
     description: "Sólido en la marca y el juego aéreo.",
     emoji: "🛡️",
   },
   {
     code: "LI",
-    name: "Lateral Izquierdo",
     description: "Velocidad y cobertura por la banda zurda.",
     emoji: "⚡",
   },
   {
     code: "LD",
-    name: "Lateral Derecho",
     description: "Desborde y seguridad por la banda diestra.",
     emoji: "⚡",
   },
@@ -61,31 +103,26 @@ const positions = [
   // --- MEDIOCAMPISTAS ---
   {
     code: "MCD",
-    name: "Mediocampista Defensivo",
     description: "El equilibrio, quite y salida limpia.",
     emoji: "⚓",
   },
   {
     code: "MC",
-    name: "Mediocampista Central",
     description: "Control del ritmo, pase y despliegue.",
     emoji: "🎯",
   },
   {
     code: "MCO",
-    name: "Mediocampista Ofensivo",
     description: "Visión de juego, último pase y gol.",
     emoji: "🪄",
   },
   {
     code: "MI",
-    name: "Mediocentro Izquierdo",
     description: "Recorrido y llegada por la banda izquierda.",
     emoji: "🏃‍♂️",
   },
   {
     code: "MD",
-    name: "Mediocentro Derecho",
     description: "Recorrido y llegada por la banda derecha.",
     emoji: "🏃‍♂️",
   },
@@ -93,23 +130,20 @@ const positions = [
   // --- DELANTEROS ---
   {
     code: "EI",
-    name: "Extremo Izquierdo",
     description: "Desequilibrio, diagonal y remate.",
     emoji: "🔥",
   },
   {
     code: "ED",
-    name: "Extremo Derecho",
     description: "Desborde, velocidad y centros precisos.",
     emoji: "🔥",
   },
   {
     code: "DC",
-    name: "Delantero Centro",
     description: "Olfato goleador y referencia de ataque.",
     emoji: "⚽",
   },
-] as const;
+];
 
 const initialStats: PlayerStats = {
   overall: 50,
@@ -133,23 +167,28 @@ export default function OnboardingWizard({
   const [nickname, setNickname] = useState(initialNickname);
   
   // Posiciones seleccionadas (máximo 3) y la posición principal
-  const [selectedPositions, setSelectedPositions] = useState<string[]>(
-    initialPosition ? [initialPosition] : []
+  const [selectedPositions, setSelectedPositions] = useState<PlayerPosition[]>(
+    isPlayerPosition(initialPosition) ? [initialPosition] : []
   );
-  const [primaryPosition, setPrimaryPosition] = useState<string>(initialPosition || "");
+  const [primaryPosition, setPrimaryPosition] = useState<PlayerPosition | "">(
+    isPlayerPosition(initialPosition) ? initialPosition : ""
+  );
 
   const [avatar, setAvatar] = useState(initialAvatar);
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState(initialAvatar);
+  const [backgroundRemoved, setBackgroundRemoved] = useState(false);
+  const [processingBackground, setProcessingBackground] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [created, setCreated] = useState(false);
+  const [secondaryPositionsSaved, setSecondaryPositionsSaved] = useState(true);
 
   const [playerStats, setPlayerStats] =
     useState<PlayerStats>(initialStats);
 
-  const [rarity, setRarity] = useState<CardRarity>("BRONZE");
+  const [rarity, setRarity] = useState<PlayerRarity>("BRONZE");
 
   function handlePhotoChange(e: ChangeEvent<HTMLInputElement>) {
     setError("");
@@ -169,11 +208,36 @@ export default function OnboardingWizard({
       return;
     }
 
+    if (photoPreview.startsWith("blob:")) URL.revokeObjectURL(photoPreview);
     setPhoto(file);
     setPhotoPreview(URL.createObjectURL(file));
+    setBackgroundRemoved(false);
   }
 
-  function handlePositionToggle(code: string) {
+  async function handleRemoveBackground() {
+    if (!photo || processingBackground) return;
+
+    setError("");
+    setProcessingBackground(true);
+
+    try {
+      const processedPhoto = await removeImageBackground(photo);
+      const processedPreview = URL.createObjectURL(processedPhoto);
+      if (photoPreview.startsWith("blob:")) URL.revokeObjectURL(photoPreview);
+      setPhotoPreview(processedPreview);
+      setPhoto(processedPhoto);
+      setBackgroundRemoved(true);
+    } catch (processingError) {
+      setError(
+        getErrorMessage(processingError) ??
+          "No se pudo quitar el fondo. Comprueba tu conexión e inténtalo de nuevo."
+      );
+    } finally {
+      setProcessingBackground(false);
+    }
+  }
+
+  function handlePositionToggle(code: PlayerPosition) {
     setError("");
 
     if (selectedPositions.includes(code)) {
@@ -243,6 +307,7 @@ export default function OnboardingWizard({
     setLoading(true);
 
     let uploadedPath: string | null = null;
+    let currentStep = "verificar la sesión";
 
     try {
       const supabase = createClient();
@@ -259,6 +324,7 @@ export default function OnboardingWizard({
       let finalAvatar = avatar;
 
       if (photo) {
+        currentStep = "subir la fotografía";
         const extension = photo.type === "image/png"
           ? "png"
           : photo.type === "image/webp"
@@ -290,57 +356,166 @@ export default function OnboardingWizard({
         throw new Error("Debes subir una fotografía para tu Player Card.");
       }
 
-      // Retrieve initial stats first.
-      const { data: stats, error: statsError } = await supabase
+      if (!isPlayerPosition(primaryPosition)) {
+        throw new Error("Debes seleccionar una posición principal válida.");
+      }
+      const selectedPrimaryPosition = primaryPosition;
+
+      currentStep = "preparar el perfil del jugador";
+      const { error: profileSeedError } = await supabase
+        .from("profiles")
+        .upsert(
+          {
+            id: user.id,
+            nickname: nickname.trim(),
+            position: selectedPrimaryPosition,
+            onboarding_completed: false,
+          },
+          { onConflict: "id" }
+        );
+
+      if (profileSeedError) throw profileSeedError;
+
+      currentStep = "cargar las estadísticas iniciales";
+      const { data: initialStats, error: statsError } = await supabase
         .from("player_stats")
         .select(
-          "overall, pace, shooting, passing, dribbling, defending, physical, rarity"
+          "pace, shooting, passing, dribbling, defending, physical"
         )
         .eq("player_id", user.id)
-        .single();
+        .maybeSingle();
 
       if (statsError) throw statsError;
+      let stats = initialStats;
 
-      // Save player profile (incluyendo posición principal y posiciones secundarias si tu DB lo soporta)
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .update({
-          nickname: nickname.trim(),
-          position: primaryPosition, // Posición principal para la carta
-          secondary_positions: selectedPositions.filter(p => p !== primaryPosition), // Opcional si agregaste esta columna
-          avatar_url: finalAvatar,
-          onboarding_completed: true,
-        })
-        .eq("id", user.id);
+      if (!stats) {
+        currentStep = "crear las estadísticas iniciales";
+        const defaultAttributes: PlayerAttributes = {
+          pace: 50,
+          shooting: 50,
+          passing: 50,
+          dribbling: 50,
+          defending: 50,
+          physical: 50,
+        };
+        const initialRating = calculatePlayerRating(
+          selectedPrimaryPosition,
+          defaultAttributes
+        );
+        const { data: createdStats, error: createStatsError } = await supabase
+          .from("player_stats")
+          .insert({
+            player_id: user.id,
+            ...defaultAttributes,
+            overall: initialRating.overall,
+            rarity: initialRating.rarity,
+          })
+          .select("pace, shooting, passing, dribbling, defending, physical")
+          .single();
 
-      if (profileError) throw profileError;
+        if (createStatsError?.code === "23505") {
+          // Another request may have initialized the row at the same time.
+          const { data: existingStats, error: reloadError } = await supabase
+            .from("player_stats")
+            .select("pace, shooting, passing, dribbling, defending, physical")
+            .eq("player_id", user.id)
+            .maybeSingle();
 
-      setPlayerStats({
-        overall: stats.overall,
+          if (reloadError || !existingStats) {
+            throw reloadError ?? createStatsError;
+          }
+
+          stats = existingStats;
+        } else if (createStatsError) {
+          throw createStatsError;
+        } else {
+          stats = createdStats;
+        }
+      }
+
+      if (!stats) {
+        throw new Error("No fue posible calcular la valoración del jugador.");
+      }
+
+      const attributes: PlayerAttributes = {
         pace: stats.pace,
         shooting: stats.shooting,
         passing: stats.passing,
         dribbling: stats.dribbling,
         defending: stats.defending,
         physical: stats.physical,
-      });
+      };
+      const rating = calculatePlayerRating(selectedPrimaryPosition, attributes);
 
-      setRarity(stats.rarity as CardRarity);
+      currentStep = "guardar el perfil";
+      // Save the avatar URL and primary position in the profile row.
+      const profileUpdate = {
+        id: user.id,
+        nickname: nickname.trim(),
+        position: primaryPosition,
+        secondary_positions: selectedPositions.filter((p) => p !== primaryPosition),
+        avatar_url: finalAvatar,
+        onboarding_completed: true,
+      };
+      let { data: savedProfile, error: profileError } = await supabase
+        .from("profiles")
+        .upsert(profileUpdate, { onConflict: "id" })
+        .select("avatar_url")
+        .maybeSingle();
+
+      if (profileError && isMissingColumnError(profileError, "secondary_positions")) {
+        console.warn(
+          "La columna secondary_positions no existe; se guardará la posición principal y la fotografía."
+        );
+        setSecondaryPositionsSaved(false);
+
+        const { data, error } = await supabase
+          .from("profiles")
+          .upsert({
+            id: user.id,
+            nickname: profileUpdate.nickname,
+            position: profileUpdate.position,
+            avatar_url: profileUpdate.avatar_url,
+            onboarding_completed: profileUpdate.onboarding_completed,
+          }, { onConflict: "id" })
+          .select("avatar_url")
+          .maybeSingle();
+
+        savedProfile = data;
+        profileError = error;
+      }
+
+      if (profileError) throw profileError;
+      if (!savedProfile || savedProfile.avatar_url !== finalAvatar) {
+        throw new Error("El perfil no confirmó el guardado de la fotografía.");
+      }
+
+      setPlayerStats({ ...rating.attributes, overall: rating.overall });
+
+      setRarity(rating.rarity);
       setAvatar(finalAvatar);
       setCreated(true);
 
     } catch (err) {
       if (uploadedPath) {
-        const supabase = createClient();
-        await supabase.storage
-          .from("player-avatars")
-          .remove([uploadedPath]);
+        try {
+          const supabase = createClient();
+          const { error: cleanupError } = await supabase.storage
+            .from("player-avatars")
+            .remove([uploadedPath]);
+          if (cleanupError) {
+            console.warn("No se pudo limpiar la fotografía temporal.", cleanupError);
+          }
+        } catch (cleanupError) {
+          console.warn("No se pudo limpiar la fotografía temporal.", cleanupError);
+        }
       }
 
+      const errorMessage = getErrorMessage(err);
       setError(
-        err instanceof Error
-          ? err.message
-          : "No fue posible crear tu Player Card."
+        errorMessage
+          ? `No fue posible ${currentStep}: ${errorMessage}`
+          : `No fue posible ${currentStep}.`
       );
     } finally {
       setLoading(false);
@@ -387,6 +562,12 @@ export default function OnboardingWizard({
               Esta es tu primera carta. Posición principal: {primaryPosition}.
             </p>
           </div>
+
+          {!secondaryPositionsSaved && selectedPositions.length > 1 && (
+            <p className="mt-3 rounded-xl border border-amber-300/15 bg-amber-300/[0.06] p-3 text-center text-xs leading-5 text-amber-100/80">
+              La fotografía y tu posición principal quedaron guardadas. Las posiciones secundarias no se guardaron porque tu perfil aún no tiene ese campo.
+            </p>
+          )}
 
           <button
             onClick={() => {
@@ -538,7 +719,7 @@ export default function OnboardingWizard({
                           <span className="text-xl">{item.emoji}</span>
                           <span className="min-w-0 flex-1">
                             <span className="block font-black text-xs">
-                              {item.code} · {item.name}
+                              {item.code} · {getPlayerPositionName(item.code)}
                             </span>
                           </span>
                         </button>
@@ -632,6 +813,23 @@ export default function OnboardingWizard({
                 />
               </label>
 
+              <button
+                type="button"
+                onClick={handleRemoveBackground}
+                disabled={!photo || backgroundRemoved || processingBackground || loading}
+                className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#36D414]/30 bg-[#36D414]/5 px-4 text-xs font-bold text-[#8af77a] transition hover:bg-[#36D414]/10 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Sparkles size={15} />
+                {processingBackground
+                  ? "QUITANDO EL FONDO..."
+                  : backgroundRemoved
+                    ? "FONDO ELIMINADO"
+                    : "QUITAR FONDO DE LA FOTO"}
+              </button>
+              <p className="mt-2 text-center text-[10px] text-gray-500">
+                Se procesa en este dispositivo. La primera vez se descargan los recursos del modelo.
+              </p>
+
               <div className="mt-4 rounded-xl border border-white/5 bg-white/[0.03] p-3">
                 <p className="text-[11px] leading-relaxed text-gray-400">
                   Consejo: utiliza una fotografía frontal, con buena iluminación y donde tu rostro sea claramente visible.
@@ -677,11 +875,11 @@ export default function OnboardingWizard({
               <button
                 type="button"
                 onClick={createPlayerCard}
-                disabled={loading || !photoPreview}
+                disabled={loading || processingBackground || !photoPreview}
                 className="flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-[#36D414] text-xs font-black uppercase tracking-wide text-black shadow-[0_5px_20px_rgba(54,212,20,0.2)] transition-all hover:-translate-y-0.5 hover:bg-[#48e51d] disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {loading ? "CREANDO..." : "CREAR MI CARTA"}
-                {!loading && <Sparkles size={16} />}
+                {processingBackground ? "PROCESANDO FOTO..." : loading ? "CREANDO..." : "CREAR MI CARTA"}
+                {!loading && !processingBackground && <Sparkles size={16} />}
               </button>
             )}
           </div>

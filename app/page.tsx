@@ -12,6 +12,12 @@ import {
 } from "lucide-react";
 
 import { createClient } from "../src/lib/supabase/client";
+import {
+  getAuthErrorMessage,
+  normalizeEmail,
+  validateEmail,
+  validateNewPassword,
+} from "@/src/lib/auth/validation";
 
 type AuthMode = "login" | "register";
 
@@ -32,6 +38,24 @@ export default function AuthPage() {
 
     setError("");
     setSuccess("");
+
+    const emailValidation = validateEmail(email);
+    if (emailValidation) {
+      setError(emailValidation);
+      return;
+    }
+
+    if (mode === "register") {
+      const passwordValidation = validateNewPassword(password);
+      if (passwordValidation) {
+        setError(passwordValidation);
+        return;
+      }
+    } else if (!password) {
+      setError("Escribe tu contraseña.");
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -39,18 +63,28 @@ export default function AuthPage() {
 
       if (mode === "register") {
         const { data, error } = await supabase.auth.signUp({
-          email,
+          email: normalizeEmail(email),
           password,
           options: {
             emailRedirectTo: `${window.location.origin}/auth/callback`,
           },
         });
 
-        if (error) throw error;
+        if (error) {
+          setError(getAuthErrorMessage(error, "register"));
+          return;
+        }
 
         if (data.session) {
           router.replace("/onboarding");
           router.refresh();
+          return;
+        }
+
+        if (data.user?.identities?.length === 0) {
+          setError(
+            "Este correo ya está asociado a una cuenta. Inicia sesión o restablece tu contraseña."
+          );
           return;
         }
 
@@ -59,11 +93,14 @@ export default function AuthPage() {
         );
       } else {
         const { error } = await supabase.auth.signInWithPassword({
-          email,
+          email: normalizeEmail(email),
           password,
         });
 
-        if (error) throw error;
+        if (error) {
+          setError(getAuthErrorMessage(error, "login"));
+          return;
+        }
 
         // Consultar el estado real del perfil.
         const {
@@ -94,11 +131,7 @@ export default function AuthPage() {
         return;
       }
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Ocurrió un error inesperado. Inténtalo nuevamente."
-      );
+      setError(getAuthErrorMessage(err, mode));
     } finally {
       setLoading(false);
     }
@@ -202,7 +235,11 @@ export default function AuthPage() {
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="acadademia@correo.com"
                   required
+                  maxLength={254}
                   autoComplete="email"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                   className="h-12 w-full rounded-xl border border-white/10 bg-[#111711] pl-11 pr-4 text-sm text-white outline-none transition placeholder:text-gray-600 focus:border-[#36D414] focus:ring-2 focus:ring-[#36D414]/10"
                 />
               </div>
@@ -228,7 +265,7 @@ export default function AuthPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
                   required
-                  minLength={8}
+                  minLength={1}
                   autoComplete={
                     mode === "login" ? "current-password" : "new-password"
                   }

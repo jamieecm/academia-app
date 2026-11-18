@@ -4,6 +4,10 @@ import { useState, type FormEvent } from "react";
 import { createClient } from "@/src/lib/supabase/client";
 import { LockKeyhole, ArrowRight } from "lucide-react";
 import { useRouter } from "next/navigation";
+import {
+  getAuthErrorMessage,
+  validateNewPassword,
+} from "@/src/lib/auth/validation";
 
 export default function ResetPasswordPage() {
   const router = useRouter();
@@ -20,8 +24,9 @@ export default function ResetPasswordPage() {
     setError("");
     setSuccess("");
 
-    if (password.length < 8) {
-      setError("La contraseña debe tener al menos 8 caracteres.");
+    const passwordValidation = validateNewPassword(password);
+    if (passwordValidation) {
+      setError(passwordValidation);
       return;
     }
 
@@ -48,10 +53,8 @@ export default function ResetPasswordPage() {
         router.refresh();
       }, 1800);
 
-    } catch {
-      setError(
-        "No fue posible actualizar la contraseña. Solicita un nuevo enlace de recuperación."
-      );
+    } catch (err) {
+      setError(getAuthErrorMessage(err, "reset"));
     } finally {
       setLoading(false);
     }
@@ -166,7 +169,7 @@ export default function ResetPasswordPage() {
               "ACTUALIZANDO..."
             ) : (
               <span className="flex items-center gap-2">
-                ACTUALIZAR CONTRASEÑA <ArrowRight size={18} />
+                ACTUALIZAR<ArrowRight size={18} />
               </span>
             )}
           </button>

@@ -1,8 +1,34 @@
+export const PLAYER_POSITIONS = [
+  "POR",
+  "DFC",
+  "LI",
+  "LD",
+  "MCD",
+  "MC",
+  "MCO",
+  "MI",
+  "MD",
+  "EI",
+  "ED",
+  "DC",
+] as const;
 
-export type PlayerPosition = "POR" | "DEF" | "MED" | "DEL";
+export type PlayerPosition = (typeof PLAYER_POSITIONS)[number];
 
-// Posiciones que pueden llegar desde Supabase.
-export type PlayerPositionInput = PlayerPosition | "DC";
+export const POSITION_NAMES: Record<PlayerPosition, string> = {
+  POR: "Portero",
+  DFC: "Defensa Central",
+  LI: "Lateral Izquierdo",
+  LD: "Lateral Derecho",
+  MCD: "Mediocampista Defensivo",
+  MC: "Mediocampista Central",
+  MCO: "Mediocampista Ofensivo",
+  MI: "Mediocentro Izquierdo",
+  MD: "Mediocentro Derecho",
+  EI: "Extremo Izquierdo",
+  ED: "Extremo Derecho",
+  DC: "Delantero Centro",
+};
 
 export type PlayerAttributes = {
   pace: number;
@@ -26,12 +52,10 @@ export type ValidationResult = {
   errors: string[];
 };
 
-// Ponderaciones por posición.
-// Cada columna suma 100%.
-const POSITION_WEIGHTS: Record<
-  PlayerPosition,
-  Record<keyof PlayerAttributes, number>
-> = {
+type AttributeWeights = Record<keyof PlayerAttributes, number>;
+
+// Pesos iniciales por posición. Cada fila suma 100 y se aplica a atributos 1–99.
+const POSITION_WEIGHTS: Record<PlayerPosition, AttributeWeights> = {
   POR: {
     pace: 5,
     shooting: 5,
@@ -40,7 +64,7 @@ const POSITION_WEIGHTS: Record<
     defending: 35,
     physical: 30,
   },
-  DEF: {
+  DFC: {
     pace: 10,
     shooting: 5,
     passing: 15,
@@ -48,7 +72,31 @@ const POSITION_WEIGHTS: Record<
     defending: 35,
     physical: 25,
   },
-  MED: {
+  LI: {
+    pace: 20,
+    shooting: 5,
+    passing: 15,
+    dribbling: 15,
+    defending: 25,
+    physical: 20,
+  },
+  LD: {
+    pace: 20,
+    shooting: 5,
+    passing: 15,
+    dribbling: 15,
+    defending: 25,
+    physical: 20,
+  },
+  MCD: {
+    pace: 10,
+    shooting: 5,
+    passing: 25,
+    dribbling: 15,
+    defending: 25,
+    physical: 20,
+  },
+  MC: {
     pace: 15,
     shooting: 10,
     passing: 25,
@@ -56,49 +104,68 @@ const POSITION_WEIGHTS: Record<
     defending: 15,
     physical: 15,
   },
-  DEL: {
+  MCO: {
+    pace: 15,
+    shooting: 20,
+    passing: 25,
+    dribbling: 25,
+    defending: 5,
+    physical: 10,
+  },
+  MI: {
     pace: 20,
-    shooting: 30,
+    shooting: 10,
+    passing: 20,
+    dribbling: 20,
+    defending: 15,
+    physical: 15,
+  },
+  MD: {
+    pace: 20,
+    shooting: 10,
+    passing: 20,
+    dribbling: 20,
+    defending: 15,
+    physical: 15,
+  },
+  EI: {
+    pace: 25,
+    shooting: 25,
     passing: 15,
+    dribbling: 25,
+    defending: 3,
+    physical: 7,
+  },
+  ED: {
+    pace: 25,
+    shooting: 25,
+    passing: 15,
+    dribbling: 25,
+    defending: 3,
+    physical: 7,
+  },
+  DC: {
+    pace: 20,
+    shooting: 35,
+    passing: 10,
     dribbling: 20,
     defending: 5,
     physical: 10,
   },
 };
 
-/**
- * Normaliza los códigos de posición recibidos desde Supabase.
- * DC utiliza las ponderaciones de DEL.
- */
-export function normalizePlayerPosition(
-  position: PlayerPositionInput
-): PlayerPosition {
-  const normalized = position.trim().toUpperCase();
-
-  if (normalized === "DC") {
-    return "DEL";
-  }
-
-  if (
-    normalized === "POR" ||
-    normalized === "DEF" ||
-    normalized === "MED" ||
-    normalized === "DEL"
-  ) {
-    return normalized;
-  }
-
-  throw new Error(`Posición no válida: ${position}`);
+export function isPlayerPosition(position: string): position is PlayerPosition {
+  return PLAYER_POSITIONS.some((validPosition) => validPosition === position);
 }
 
-/**
- * Valida que los atributos sean números enteros entre 1 y 99.
- */
+export function getPlayerPositionName(position: PlayerPosition): string {
+  return POSITION_NAMES[position];
+}
+
 export function validatePlayerAttributes(
   attributes: PlayerAttributes
 ): ValidationResult {
   const errors: string[] = [];
-
   const attributeNames: Record<keyof PlayerAttributes, string> = {
     pace: "Ritmo",
     shooting: "Tiro",
@@ -118,42 +185,33 @@ export function validatePlayerAttributes(
     }
   }
 
-  return {
-    valid: errors.length === 0,
-    errors,
-  };
+  return { valid: errors.length === 0, errors };
 }
 
-/**
- * Calcula el OVR según las ponderaciones de cada posición.
- */
 export function calculateOverall(
-  position: PlayerPositionInput,
+  position: string,
   attributes: PlayerAttributes
 ): number {
   const validation = validatePlayerAttributes(attributes);
-
   if (!validation.valid) {
     throw new Error(validation.errors.join(" "));
   }
 
-  const normalizedPosition = normalizePlayerPosition(position);
-  const weights = POSITION_WEIGHTS[normalizedPosition];
+  const normalizedPosition = position.trim().toUpperCase();
+  if (!isPlayerPosition(normalizedPosition)) {
+    throw new Error(`Posición no válida: ${position}`);
+  }
 
-  const overall = Object.entries(weights).reduce(
-    (total, [attribute, weight]) => {
-      const key = attribute as keyof PlayerAttributes;
-      return total + attributes[key] * (weight / 100);
-    },
+  const weights = POSITION_WEIGHTS[normalizedPosition];
+  const overall = (Object.keys(weights) as (keyof PlayerAttributes)[]).reduce(
+    (total, attribute) =>
+      total + attributes[attribute] * (weights[attribute] / 100),
     0
   );
 
   return Math.round(overall);
 }
 
-/**
- * Determina la rareza permanente según el OVR.
- */
 export function getPlayerRarity(overall: number): PlayerRarity {
   if (!Number.isInteger(overall) || overall < 1 || overall > 99) {
     throw new Error("El OVR debe ser un número entero entre 1 y 99.");
@@ -161,15 +219,11 @@ export function getPlayerRarity(overall: number): PlayerRarity {
 
   if (overall >= 75) return "GOLD";
   if (overall >= 65) return "SILVER";
-
   return "BRONZE";
 }
 
-/**
- * Calcula la valoración completa del jugador.
- */
 export function calculatePlayerRating(
-  position: PlayerPositionInput,
+  position: string,
   attributes: PlayerAttributes
 ): PlayerRating {
   const overall = calculateOverall(position, attributes);

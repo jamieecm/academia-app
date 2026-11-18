@@ -4,6 +4,11 @@ import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import { createClient } from "@/src/lib/supabase/client";
 import { ArrowLeft, Mail, ArrowRight } from "lucide-react";
+import {
+  getAuthErrorMessage,
+  normalizeEmail,
+  validateEmail,
+} from "@/src/lib/auth/validation";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -14,15 +19,22 @@ export default function ForgotPasswordPage() {
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    setLoading(true);
     setError("");
     setMessage("");
+
+    const emailValidation = validateEmail(email);
+    if (emailValidation) {
+      setError(emailValidation);
+      return;
+    }
+
+    setLoading(true);
 
     try {
       const supabase = createClient();
 
       const { error } = await supabase.auth.resetPasswordForEmail(
-        email.trim().toLowerCase(),
+        normalizeEmail(email),
         {
           redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
         }
@@ -33,8 +45,8 @@ export default function ForgotPasswordPage() {
       setMessage(
         "Si existe una cuenta asociada a este correo, recibirás instrucciones para recuperar tu contraseña."
       );
-    } catch {
-      setError("No fue posible procesar la solicitud. Inténtalo nuevamente.");
+    } catch (err) {
+      setError(getAuthErrorMessage(err, "forgot"));
     } finally {
       setLoading(false);
     }
@@ -95,7 +107,11 @@ export default function ForgotPasswordPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="acadademia@correo.com"
                 required
+                maxLength={254}
                 autoComplete="email"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 className="h-12 w-full rounded-xl border border-white/10 bg-[#111711] pl-11 pr-4 text-sm text-white outline-none transition placeholder:text-gray-600 focus:border-[#36D414] focus:ring-2 focus:ring-[#36D414]/10"
               />
             </div>
